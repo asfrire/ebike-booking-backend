@@ -11,11 +11,19 @@ class Booking extends Model
 
     protected $fillable = [
         'customer_id',
+        'subdivision_id',
+        'phase_id',
         'pickup_location',
         'dropoff_location',
+        'block_number',
+        'lot_number',
         'pax',
         'remaining_pax',
         'status',
+        'total_fare',
+        'platform_fee',
+        'rider_earning',
+        'fare_per_passenger',
     ];
 
     protected $casts = [
@@ -26,6 +34,16 @@ class Booking extends Model
     public function customer()
     {
         return $this->belongsTo(User::class, 'customer_id');
+    }
+
+    public function subdivision()
+    {
+        return $this->belongsTo(Subdivision::class);
+    }
+
+    public function phase()
+    {
+        return $this->belongsTo(Phase::class);
     }
 
     public function bookingRiders()

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+</head>
+<body>
+    <h1>🔌 WebSocket Connection Test</h1>
+    <div id="status">Connecting...</div>
+    <button onclick="sendTest()">Send Test Message</button>
+    <div id="messages"></div>
+
+    <script>
+        const socket = io('http://localhost:6004');
+        
+        socket.on('connect', () => {
+            document.getElementById('status').innerHTML = 
+                '<span style="color: green;">✅ Connected! Socket ID: ' + socket.id + '</span>';
+            console.log('✅ Connected with ID:', socket.id);
+        });
+        
+        socket.on('disconnect', () => {
+            document.getElementById('status').innerHTML = 
+                '<span style="color: red;">❌ Disconnected</span>';
+        });
+        
+        socket.on('test-message', (data) => {
+            const messages = document.getElementById('messages');
+            messages.innerHTML += '<p>Received: ' + JSON.stringify(data) + '</p>';
+        });
+        
+        function sendTest() {
+            socket.emit('test-message', {
+                message: 'Hello from client!',
+                timestamp: new Date().toISOString()
+            });
+        }
+    </script>
+</body>
+</html>
