@@ -30,6 +30,16 @@ class Rider extends Model
         return $this->hasMany(BookingRider::class);
     }
 
+    public function riderSessions()
+    {
+        return $this->hasMany(RiderSession::class);
+    }
+
+    public function activeSession()
+    {
+        return $this->hasOne(RiderSession::class)->whereNull('time_out');
+    }
+
     public function activeBookings()
     {
         return $this->bookingRiders()

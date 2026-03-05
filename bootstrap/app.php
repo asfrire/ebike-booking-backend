@@ -12,6 +12,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->api([
+            \App\Http\Middleware\HandleCors::class, // Custom CORS middleware
+        ]);
+        
         $middleware->alias([
             'role' => \App\Http\Middleware\RoleMiddleware::class,
             'check.timeouts' => \App\Http\Middleware\CheckTimeoutsMiddleware::class,
