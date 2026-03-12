@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
-use App\Models\Rider;
+use App\Models\RiderQueue;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -38,9 +38,8 @@ class AuthController extends Controller
 
         // Create rider record if role is rider
         if ($request->role === 'rider') {
-            Rider::create([
-                'user_id' => $user->id,
-                'capacity' => 2,
+            RiderQueue::create([
+                'rider_id' => $user->id,
             ]);
         }
 
@@ -74,6 +73,13 @@ class AuthController extends Controller
         if ($request->device_token) {
             $user->device_token = $request->device_token;
             $user->save();
+        }
+
+        // Create rider queue record if role is rider and missing
+        if ($user->role === 'rider' && !$user->riderQueue) {
+            RiderQueue::create([
+                'rider_id' => $user->id,
+            ]);
         }
 
         $token = $user->createToken('auth_token')->plainTextToken;

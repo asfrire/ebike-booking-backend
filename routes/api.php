@@ -6,18 +6,31 @@ use App\Http\Controllers\Api\RiderController;
 use App\Http\Controllers\Api\FareController;
 use Illuminate\Support\Facades\Route;
 
-// Test route for debugging
-Route::get('/test', function () {
-    return response()->json([
-        'message' => 'API is working!',
-        'timestamp' => now(),
-        'method' => 'GET'
-    ]);
-});
+// Test route for admin bookings without auth
+Route::get('/public/bookings', [BookingController::class, 'adminIndex']);
+
+// Get online riders count
+Route::get('/rider/status', [RiderController::class, 'getStatus'])->middleware('auth:sanctum');
+
+// Get online riders count for customers
+Route::get('/online-riders-count', [RiderController::class, 'getOnlineRidersCount'])->middleware('auth:sanctum');
+
+// Get customer addresses
+Route::get('/customer/addresses', [BookingController::class, 'getCustomerAddresses'])->middleware('auth:sanctum');
+Route::post('/customer/addresses', [BookingController::class, 'createCustomerAddress'])->middleware('auth:sanctum');
+
+// Get rider vehicles
+Route::get('/rider/vehicles', [RiderController::class, 'getVehicles'])->middleware('auth:sanctum');
+
+// Create rider vehicle
+Route::post('/rider/vehicles', [RiderController::class, 'createVehicle'])->middleware('auth:sanctum');
 
 // Public routes
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
+Route::get('/test', function () {
+    return response()->json(['message' => 'API is working']);
+});
 
 // Protected routes
 Route::middleware('auth:sanctum')->group(function () {
@@ -33,12 +46,19 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/bookings', [BookingController::class, 'store']);
         Route::get('/bookings/{booking}', [BookingController::class, 'show']);
         Route::put('/bookings/{booking}/cancel', [BookingController::class, 'cancel']);
+        Route::put('/bookings/{booking}/start-ride', [BookingController::class, 'startRide']);
+        Route::put('/bookings/{booking}/complete', [BookingController::class, 'completeRide']);
+    });
+    
+    // Shared routes for riders and customers (complete ride functionality)
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::put('/rider/bookings/{booking}/status', [RiderController::class, 'updateBookingStatus']);
     });
     
     // Rider routes
     Route::middleware('role:rider')->group(function () {
         Route::get('/rider/bookings', [RiderController::class, 'bookings']);
-        Route::post('/rider/bookings/{booking}/accept', [RiderController::class, 'acceptBooking']);
+        Route::put('/rider/bookings/{booking}/accept', [RiderController::class, 'acceptBooking']);
         Route::post('/rider/bookings/{booking}/reject', [RiderController::class, 'rejectBooking']);
         Route::post('/rider/go-online', [RiderController::class, 'goOnline']);
         Route::post('/rider/go-offline', [RiderController::class, 'goOffline']);
@@ -49,6 +69,8 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // Admin routes
     Route::middleware('role:admin')->group(function () {
+        Route::get('/admin/stats', [BookingController::class, 'adminStats']);
+        Route::get('/admin/users', [BookingController::class, 'adminUsers']);
         Route::get('/admin/bookings', [BookingController::class, 'adminIndex']);
         Route::get('/admin/bookings/{booking}', [BookingController::class, 'adminShow']);
         Route::put('/admin/bookings/{booking}/cancel', [BookingController::class, 'adminCancel']);

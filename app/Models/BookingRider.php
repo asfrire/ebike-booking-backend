@@ -29,7 +29,7 @@ class BookingRider extends Model
 
     public function rider()
     {
-        return $this->belongsTo(Rider::class);
+        return $this->belongsTo(RiderQueue::class, 'rider_id');
     }
 
     public function isExpired()

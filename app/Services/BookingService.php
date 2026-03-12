@@ -4,7 +4,7 @@ namespace App\Services;
 
 use App\Models\Booking;
 use App\Models\BookingRider;
-use App\Models\Rider;
+use App\Models\RiderQueue;
 use App\Models\RiderSession;
 use App\Models\Subdivision;
 use App\Models\Phase;
@@ -29,15 +29,19 @@ class BookingService
 
                 // Return seats to booking
                 $booking = $assignment->booking;
-                $booking->remaining_pax += $assignment->allocated_seats;
-                $booking->save();
+                if ($booking) {
+                    $booking->remaining_pax += $assignment->allocated_seats;
+                    $booking->save();
+
+                    // Try to reassign the returned seats
+                    $this->assignRiders($booking, true);
+                }
 
                 // Move rider to end of queue
-                $rider = $assignment->rider;
-                $this->moveRiderToEndOfQueue($rider);
-
-                // Try to reassign the returned seats
-                $this->assignRiders($booking, true);
+                $riderQueue = $assignment->rider;
+                if ($riderQueue) {
+                    $this->moveRiderToEndOfQueue($riderQueue);
+                }
             });
         }
     }
@@ -51,34 +55,44 @@ class BookingService
         }
 
         // Get available riders ordered by queue position
-        $riders = Rider::available()
+        $riders = RiderQueue::available()
             ->byQueuePosition()
             ->get();
 
-        foreach ($riders as $rider) {
+        $assignedRiders = collect();
+
+        foreach ($riders as $riderQueue) {
             if ($remaining <= 0) {
                 break;
             }
 
             // Skip if this rider already has an assignment for this booking
             $existingAssignment = BookingRider::where('booking_id', $booking->id)
-                ->where('rider_id', $rider->id)
+                ->where('rider_id', $riderQueue->rider_id)
                 ->first();
             
             if ($existingAssignment) {
                 continue;
             }
 
-            $seats = min($rider->capacity, $remaining);
+            $riderCapacity = $riderQueue->user->vehicles->sum('capacity');
+            $seats = min($riderCapacity, $remaining);
 
             // Create booking rider assignment
             BookingRider::create([
                 'booking_id' => $booking->id,
-                'rider_id' => $rider->id,
+                'rider_id' => $riderQueue->rider_id,
                 'allocated_seats' => $seats,
                 'status' => 'assigned',
                 'expires_at' => now()->addMinutes(3),
             ]);
+
+            // Set rider status to on duty
+            $riderQueue->status = 'on_duty';
+            $riderQueue->save();
+
+            // Add to assigned riders list
+            $assignedRiders->push($riderQueue);
 
             $remaining -= $seats;
         }
@@ -88,12 +102,10 @@ class BookingService
             $booking->remaining_pax = $remaining;
         }
         
-        if ($remaining > 0) {
-            $booking->status = 'partially_assigned';
-        } else {
-            $booking->status = 'fully_assigned';
+        // Keep status as 'pending' until riders accept
+        if ($remaining <= 0 && !$preserveRemainingPax) {
+            $booking->status = 'pending'; // All seats assigned, waiting for acceptance
         }
-        $booking->save();
 
         // Send push notifications to assigned riders
         $this->sendPushNotifications($booking);
@@ -102,85 +114,29 @@ class BookingService
         broadcast(new BookingAssigned($booking, $assignedRiders));
     }
 
-    public function acceptBooking(Rider $rider, Booking $booking)
+    public function acceptBooking(RiderQueue $riderQueue, Booking $booking)
     {
-        return DB::transaction(function () use ($rider, $booking) {
-            // Lock the booking row
-            $lockedBooking = Booking::lockForUpdate()->find($booking->id);
+        // Update booking: change status to waiting first, then set rider_id
+        $booking->status = 'waiting';
+        $booking->rider_id = $riderQueue->rider_id;
+        $booking->save();
 
-            if ($lockedBooking->status === 'accepted') {
-                return ['success' => false, 'message' => 'Booking already accepted by other riders'];
-            }
+        // Set rider status to on duty
+        $riderQueue->status = 'on_duty';
+        $riderQueue->save();
 
-            // Find the assignment for this rider
-            $assignment = BookingRider::where('booking_id', $booking->id)
-                ->where('rider_id', $rider->id)
-                ->first();
-
-            if (!$assignment) {
-                return ['success' => false, 'message' => 'No assignment found for this rider'];
-            }
-
-            // Check if assignment is expired but seats haven't been reassigned
-            if ($assignment->status === 'expired') {
-                // Check if the seats are still available (not reassigned and accepted)
-                $reassignedSeats = BookingRider::where('booking_id', $booking->id)
-                    ->where('rider_id', '!=', $rider->id)
-                    ->where('status', 'accepted')
-                    ->sum('allocated_seats');
-
-                $totalAcceptedSeats = $reassignedSeats + $assignment->allocated_seats;
-
-                if ($totalAcceptedSeats >= $booking->pax) {
-                    return ['success' => false, 'message' => 'Seats have been reassigned to other riders'];
-                }
-
-                // Allow late acceptance
-                $assignment->status = 'accepted';
-                $assignment->save();
-            } elseif ($assignment->status === 'assigned') {
-                // Normal acceptance
-                $assignment->status = 'accepted';
-                $assignment->save();
-            } else {
-                return ['success' => false, 'message' => 'Assignment cannot be accepted'];
-            }
-
-            // Recalculate remaining_pax based on all accepted assignments
-            $totalAcceptedSeats = BookingRider::where('booking_id', $booking->id)
-                ->where('status', 'accepted')
-                ->sum('allocated_seats');
-            
-            $booking->remaining_pax = max(0, $booking->pax - $totalAcceptedSeats);
-
-            // Check if all assignments are accepted
-            $nonExpiredAssignments = BookingRider::where('booking_id', $booking->id)
-                ->where('status', '!=', 'expired')
-                ->get();
-
-            $allAccepted = $nonExpiredAssignments->every(function ($assignment) {
-                return $assignment->status === 'accepted';
-            });
-
-            if ($allAccepted && $nonExpiredAssignments->count() > 0) {
-                $booking->status = 'accepted';
-            }
-
-            $booking->save();
-
-            return ['success' => true, 'message' => 'Booking accepted successfully'];
-        });
+        return ['success' => true, 'message' => 'Booking accepted successfully'];
     }
 
-    public function moveRiderToEndOfQueue(Rider $rider)
+    public function moveRiderToEndOfQueue(RiderQueue $riderQueue)
     {
-        $oldPosition = $rider->queue_position;
-        $maxPosition = Rider::online()->max('queue_position') ?? 0;
-        $rider->queue_position = $maxPosition + 1;
-        $rider->save();
+        $oldPosition = $riderQueue->queue_position;
+        $maxPosition = RiderQueue::online()->max('queue_position') ?? 0;
+        $riderQueue->queue_position = $maxPosition + 1;
+        $riderQueue->save();
 
         // Broadcast position change
-        broadcast(new RiderPositionUpdated($rider->id, $rider->queue_position, $oldPosition));
+        broadcast(new RiderPositionUpdated($riderQueue->rider_id, $riderQueue->queue_position, $oldPosition));
     }
 
     private function sendPushNotifications(Booking $booking)
@@ -188,51 +144,51 @@ class BookingService
         $assignedRiders = $booking->assignedRiders()->with('rider.user')->get();
 
         foreach ($assignedRiders as $assignment) {
-            $user = $assignment->rider->user;
-            if ($user->device_token) {
+            $riderQueue = $assignment->rider;
+            $user = $riderQueue ? $riderQueue->user : null;
+            if ($user && $user->device_token) {
                 // TODO: Implement FCM push notification
                 Log::info("Push notification sent to rider {$user->id} for booking {$booking->id}");
             }
         }
     }
 
-    public function goOnline(Rider $rider)
+    public function goOnline(RiderQueue $riderQueue, $mode = 'stand_by')
     {
-        return DB::transaction(function () use ($rider) {
-            $rider->is_online = true;
-            
-            $maxPosition = Rider::online()->max('queue_position') ?? 0;
-            $rider->queue_position = $maxPosition + 1;
-            
-            $rider->save();
+        return DB::transaction(function () use ($riderQueue, $mode) {
+            $riderQueue->is_online = true;
+            $riderQueue->status = 'open';
+            if ($mode === 'listed') {
+                $maxPosition = RiderQueue::online()->where('queue_position', '!=', 'stand by')->max('queue_position') ?? 0;
+                $riderQueue->queue_position = (string)($maxPosition + 1);
+            } else {
+                $riderQueue->queue_position = 'stand by';
+            }
+            $riderQueue->save();
         });
     }
 
-    public function goOffline(Rider $rider)
+    public function goOffline(RiderQueue $riderQueue)
     {
-        return DB::transaction(function () use ($rider) {
+        return DB::transaction(function () use ($riderQueue) {
             // Store current position before nullifying
-            $currentPosition = $rider->queue_position;
+            $currentPosition = $riderQueue->queue_position;
             
-            $rider->is_online = false;
-            $rider->queue_position = null;
-            $rider->save();
+            $riderQueue->is_online = false;
+            $riderQueue->queue_position = null;
+            $riderQueue->status = null;
+            $riderQueue->save();
 
-            // Reorder remaining riders
-            $riders = Rider::online()
+            // Shift all riders with higher positions down
+            $riders = RiderQueue::online()
                 ->where('queue_position', '>', $currentPosition)
                 ->orderBy('queue_position')
                 ->get();
 
-            $position = $currentPosition;
             foreach ($riders as $r) {
-                $r->queue_position = $position;
+                $r->queue_position = $r->queue_position - 1;
                 $r->save();
-                
-                // Broadcast position change
-                broadcast(new RiderPositionUpdated($r->id, $r->queue_position, $r->queue_position - 1));
-                
-                $position++;
+                broadcast(new RiderPositionUpdated($r->rider_id, $r->queue_position, $r->queue_position + 1));
             }
         });
     }
@@ -240,14 +196,14 @@ class BookingService
     /**
      * Start rider session when going online
      */
-    public function startRiderSession(Rider $rider)
+    public function startRiderSession(RiderQueue $riderQueue)
     {
         // Auto-close any existing active sessions
-        $this->closeActiveSession($rider);
+        $this->closeActiveSession($riderQueue);
         
         // Create new session
         $session = RiderSession::create([
-            'rider_id' => $rider->id,
+            'rider_id' => $riderQueue->rider_id,
             'time_in' => now(),
         ]);
         
@@ -257,9 +213,9 @@ class BookingService
     /**
      * End rider session when going offline
      */
-    public function endRiderSession(Rider $rider)
+    public function endRiderSession(RiderQueue $riderQueue)
     {
-        $activeSession = $rider->activeSession()->first();
+        $activeSession = $riderQueue->activeSession()->first();
         
         if ($activeSession) {
             $timeOut = now();
@@ -277,9 +233,9 @@ class BookingService
     /**
      * Close any active session for a rider (edge case handling)
      */
-    public function closeActiveSession(Rider $rider)
+    public function closeActiveSession(RiderQueue $riderQueue)
     {
-        $activeSession = $rider->activeSession()->first();
+        $activeSession = $riderQueue->activeSession()->first();
         
         if ($activeSession) {
             $timeOut = now();
@@ -295,24 +251,24 @@ class BookingService
     /**
      * Get rider's daily statistics
      */
-    public function getRiderDailyStats(Rider $rider, $date = null)
+    public function getRiderDailyStats(RiderQueue $riderQueue, $date = null)
     {
         $date = $date ?: now()->toDateString();
         
-        // Today's rides
-        $todayRides = $rider->bookingRiders()
-            ->where('status', 'completed')
+        // Today's rides - completed bookings assigned to this rider
+        $todayRides = \App\Models\Booking::where('rider_id', $riderQueue->rider_id)
+            ->where('status', 'done')
             ->whereDate('updated_at', $date)
             ->count();
 
-        // Today's earnings
-        $todayEarnings = $rider->bookingRiders()
-            ->where('status', 'completed')
+        // Today's earnings - sum of rider_earning from completed bookings
+        $todayEarnings = \App\Models\Booking::where('rider_id', $riderQueue->rider_id)
+            ->where('status', 'done')
             ->whereDate('updated_at', $date)
-            ->sum('earning_amount');
+            ->sum('rider_earning');
 
         // Today's online time
-        $todaySessions = $rider->riderSessions()
+        $todaySessions = $riderQueue->riderSessions()
             ->whereDate('time_in', $date)
             ->get();
 
@@ -465,7 +421,7 @@ class BookingService
      */
     public function calculateEarnings(Booking $booking)
     {
-        if ($booking->status !== 'completed') {
+        if ($booking->status !== 'done') {
             return;
         }
 
@@ -503,6 +459,13 @@ class BookingService
                 'earning_amount' => $riderEarning,
                 'status' => 'completed',
             ]);
+
+            // Set rider status back to open
+            $riderQueue = RiderQueue::where('rider_id', $bookingRider->rider_id)->first();
+            if ($riderQueue) {
+                $riderQueue->status = 'open';
+                $riderQueue->save();
+            }
         }
     }
 }

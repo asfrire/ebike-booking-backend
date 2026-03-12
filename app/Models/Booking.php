@@ -75,16 +75,16 @@ class Booking extends Model
 
     public function isAccepted()
     {
-        return $this->status === 'accepted';
+        return $this->status === 'waiting';
     }
 
     public function scopePending($query)
     {
-        return $query->whereIn('status', ['pending', 'partially_assigned', 'fully_assigned']);
+        return $query->where('status', 'pending');
     }
 
     public function scopeActive($query)
     {
-        return $query->whereIn('status', ['pending', 'partially_assigned', 'fully_assigned', 'accepted']);
+        return $query->whereIn('status', ['pending', 'waiting', 'on_ride']);
     }
 }

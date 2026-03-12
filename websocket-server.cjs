@@ -121,6 +121,17 @@ function broadcastToRiderQueue(event, data) {
     logToLaravel(`📡 Sent to rider queue: ${event} - ${JSON.stringify(data)}`, 'info');
 }
 
+server.on('request', (req, res) => {
+    if (req.method === 'POST' && req.url === '/emit') {
+        io.emit('riders-updated');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+    } else {
+        res.writeHead(404);
+        res.end();
+    }
+});
+
 const PORT = process.env.PORT || 6004;
 server.listen(PORT, () => {
     console.log(`🚀 WebSocket Server running on port ${PORT}`);

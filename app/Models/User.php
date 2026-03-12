@@ -50,9 +50,29 @@ class User extends Authenticatable
         ];
     }
 
-    public function rider()
+    public function riderQueue()
     {
-        return $this->hasOne(Rider::class);
+        return $this->hasOne(RiderQueue::class, 'rider_id');
+    }
+
+    public function customerAddresses()
+    {
+        return $this->hasMany(CustomerAddress::class);
+    }
+
+    public function vehicles()
+    {
+        return $this->hasMany(Vehicle::class, 'rider_id');
+    }
+
+    public function bookingRiders()
+    {
+        return $this->hasMany(BookingRider::class, 'rider_id');
+    }
+
+    public function riderSessions()
+    {
+        return $this->hasMany(RiderSession::class, 'rider_id');
     }
 
     public function bookings()

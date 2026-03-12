@@ -22,25 +22,43 @@ class RoleMiddleware
             return response()->json(['message' => 'Unauthenticated'], 401);
         }
 
-        // Check if user has the required role
-        switch ($role) {
-            case 'admin':
-                if (!$user->isAdmin()) {
-                    return response()->json(['message' => 'Admin access required'], 403);
+        // Check if user has the required role (support multiple roles separated by |)
+        if (strpos($role, '|') !== false) {
+            $roles = explode('|', $role);
+            $allowed = false;
+            foreach ($roles as $r) {
+                $r = trim($r);
+                if (($r === 'admin' && $user->isAdmin()) ||
+                    ($r === 'rider' && $user->isRider()) ||
+                    ($r === 'customer' && $user->isCustomer())) {
+                    $allowed = true;
+                    break;
                 }
-                break;
-            case 'rider':
-                if (!$user->isRider()) {
-                    return response()->json(['message' => 'Rider access required'], 403);
-                }
-                break;
-            case 'customer':
-                if (!$user->isCustomer()) {
-                    return response()->json(['message' => 'Customer access required'], 403);
-                }
-                break;
-            default:
-                return response()->json(['message' => 'Invalid role'], 403);
+            }
+            if (!$allowed) {
+                return response()->json(['message' => 'Access denied'], 403);
+            }
+        } else {
+            // Single role check
+            switch ($role) {
+                case 'admin':
+                    if (!$user->isAdmin()) {
+                        return response()->json(['message' => 'Admin access required'], 403);
+                    }
+                    break;
+                case 'rider':
+                    if (!$user->isRider()) {
+                        return response()->json(['message' => 'Rider access required'], 403);
+                    }
+                    break;
+                case 'customer':
+                    if (!$user->isCustomer()) {
+                        return response()->json(['message' => 'Customer access required'], 403);
+                    }
+                    break;
+                default:
+                    return response()->json(['message' => 'Invalid role'], 403);
+            }
         }
 
         return $next($request);
